@@ -1,2 +1,196 @@
 .sass-cache/
 *.css.map
+
+data baidu;
+set aa;
+if late_days>10 then target=1;else target=0;
+run;
+
+proc sort data=baidu out=baidu_1;by card_id borrow_type;run;
+
+
+
+
+data baidu_dan;
+set baidu_1;
+where borrow_type=6;
+drop add_time realname username;
+run;
+
+data baidu_fen;
+set baidu_1;
+where borrow_type=8;
+drop add_time realname username;
+run;
+
+
+proc contents data=kx_return_fen out=temp;run;
+
+/*.-.*//*设置分数段格式*/
+proc format;		
+value appScore_w		
+-1=1
+0-490=2
+491-575	=3
+576-585	=4
+586-600	=5
+601-615	=6
+616-685	=7
+685-high=8;
+value bscore_w		
+-1=9
+0-375=10
+376-500	=11
+500-high=12;
+value dscore_w		
+-1=13
+0-400=14
+401-600	=15
+601-620	=	16
+620-high=17;
+value n1_w		
+-1=18
+0-515=19
+515-high=20;
+value n2_w		
+-1=	21
+0-530=22
+531-590	=23
+591-660	=24
+661-high=25;run;
+
+
+/*所需要的字段*/
+data vars;
+input name $32. @;
+datalines ;
+appScore
+bscore
+dscore
+n1
+n2
+;
+run;
+
+
+
+proc sql noprint;
+select compress(name||'_w=put('||name||","||name||'_w.)+0;') into: renames separated by' '
+from vars;
+/*按format格式重命名*/
+
+select  compress(name||'_w')  into: woe_var_ws separated by' '
+from vars where name not in ('borrow_nid','late_days','borrow_type','target');
+/*获取所需变量*/
+quit;
+
+%put &woe_var_ws;
+
+
+
+/*将字段按格式进行设置*/
+data 	kx_return_fen_1;             
+set 	kx_return_fen;
+&renames;
+keep target   borrow_nid &woe_var_ws;
+run;
+
+
+/*约等于将表格转置*/
+data kx_return_fen_2;
+set kx_return_fen_1;
+length varname $40.;
+array a &woe_var_ws;
+do i = 1 to dim(a);
+	bin_index=a[i];
+	varname=compress(scan("&woe_var_ws.",i));
+	output;
+end;
+
+keep borrow_nid target   varname  bin_index;
+run; 
+
+proc freq data=kx_return_fen_2;
+table bin_index;
+run;
+
+
+/*检查format*/
+/*
+proc sql;
+create table format_check as
+select * from kx_return_fen_2(where =(bin_index<1));
+quit;*/
+
+proc sql;
+create table total as
+select count(*) as total_cnt, sum(target) as total_target,count(*)-sum(target) as total_noevent
+  from kx_return_fen_2;
+quit;
+
+%let total_target=2365;
+%let total_noevent=40110;
+
+
+proc sql;
+create table bin as
+select bin_index, count(*) as total_cnt, sum(target) as event_cnt, sum(target)/count(*) as dpl,
+sum(1-target) as NonEvent_Cnt,log(sum(target) /&total_target/(sum(1-target)/&total_noevent)) as WOE ,
+(sum(target) /&total_target-(sum(1-target)/&total_noevent))*log(sum(target) /&total_target/(sum(1-target)/&total_noevent)) as IV
+from kx_return_fen_2 group by bin_index;
+quit;
+/*end*/
+
+
+
+data kx_dan;
+set kx_1(keep=borrow_nid borrow_type late_days xscore target);
+where borrow_type=6;
+run;
+
+data kx_fen;
+set kx_1(keep=borrow_nid borrow_type late_days xscore target);
+where borrow_type=8;
+run;
+
+
+proc sql noprint;
+proc contents data=baidu_dan out =conts;
+run;
+proc sql  noprint;
+select compress(name) into : InputVar_List separated by ' ' from conts where 
+name not in ('card_id','late_days','borrow_type','target');
+quit;
+
+
+/*data1单期*/
+%let Input_DSN=baidu_dan;							 	
+%let Target =target; 										
+%let Output_DSN_Detail =Output_DSN_Detail;				
+%let Output_DSN_Smry =Output_DSN_Smry;				
+%let Output_DSN_Sel_Detail=Output_DSN_Sel_Detail;
+%let Output_DSN_Sel_Smry =Output_DSN_Sel_Smry;			
+%let output_missing_var=output_missing_var;
+
+
+	
+
+%include "zhuhui_continuous_binning_chimerge.sas";
+
+%Num_Var_Binning
+		(	Input_DSN=&Input_DSN, 							 	/*input data set name*/
+			Target = &target , 										/*target binary variables*/
+			InputVar_List =&InputVar_List, 							/*input continuous variables list, separated by blanks*/			
+			Max_Missing_Portion = 0.6, 			/* how big of the  portiton of missing obs out of total obs is allowed; 0~1*/
+			Initial_Bin_Num = 20,						/*Inital bin number, recommeded:100 or 50 or 20 or 16 or 8*/
+			Inital_Bin_Method = 2, 					/* Equal Width(Bucket) or Equal Height(quantitle).  1: Equal Width; 2: Equal Height*/
+			Max_Bin_Num = 10, 							/*the maximum number of bins are allowed to form, 10~15*/
+			ChiSquare_Sign_Level =0.05 ,				/* signicance level for the independence chi-square test */
+			Info_Value_Threshold =0.02, 				/*  information threshould for variable selection */
+			Output_DSN_Detail =&Output_DSN_Detail,					/*Output dataset name, detailed info   */
+			Output_DSN_Smry =&Output_DSN_Smry,					/*Output dataset name, summary info  */
+			Output_DSN_Sel_Detail=&Output_DSN_Sel_Detail,
+			Output_DSN_Sel_Smry =&Output_DSN_Sel_Smry,				/*Output dataset name, summary info */
+			output_missing_var=&output_missing_var					/*Output missing_var */
+		);
+
